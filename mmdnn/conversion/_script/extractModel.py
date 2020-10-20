@@ -34,6 +34,10 @@ def extract_model(args):
         from mmdnn.conversion.examples.tensorflow.extractor import tensorflow_extractor
         extractor = tensorflow_extractor()
 
+    elif args.framework == 'tensorflow2' or args.framework == 'tf2':
+        from mmdnn.conversion.examples.tensorflow2.extractor import tf2_extractor
+        extractor = tf2_extractor()
+
     elif args.framework == 'mxnet':
         from mmdnn.conversion.examples.mxnet.extractor import mxnet_extractor
         extractor = mxnet_extractor()

@@ -78,6 +78,11 @@ class Graph(object):
     def get_nodes(self):
         return self.layer_map.values()
 
+    def add_layer(self, name, graphNode):
+        if name not in self.layer_map:
+            self.layer_map[name] = graphNode
+            self.layer_name_map[name] = name
+
 
     def get_son(self, name, path, set_flag = False):
         if name == None: return None

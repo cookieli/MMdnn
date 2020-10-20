@@ -8,6 +8,7 @@ from six import string_types as _string_types
 import keras as _keras
 from keras import backend as _K
 
+from mmdnn.conversion.caffe.common_graph import assign_attr_value
 from mmdnn.conversion.keras.keras2_graph import Keras2Graph
 import mmdnn.conversion.common.IR.graph_pb2 as graph_pb2
 from mmdnn.conversion.common.IR.graph_pb2 import NodeDef, GraphDef, DataType
@@ -101,25 +102,27 @@ class Keras2Parser(Parser):
         if isinstance(model, _string_types):
             try:
                 # Keras 2.1.6
-                from keras.applications.mobilenet import relu6
-                from keras.applications.mobilenet import DepthwiseConv2D
-                model = _keras.models.load_model(
-                    model,
-                    custom_objects={
-                        'relu6': _keras.applications.mobilenet.relu6,
-                        'DepthwiseConv2D': _keras.applications.mobilenet.DepthwiseConv2D
-                    }
-                )
+                #from keras.applications.mobilenet import relu6
+                #from keras.applications.mobilenet import DepthwiseConv2D
+                # model = _keras.models.load_model(
+                #     model,
+                #     custom_objects={
+                #         'relu6': _keras.applications.mobilenet.relu6,
+                #         'DepthwiseConv2D': _keras.applications.mobilenet.DepthwiseConv2D
+                #     }
+                # )
+                model = _keras.models.load_model(model)
             except:
                 # Keras. 2.2.2
                 import keras.layers as layers
-                model = _keras.models.load_model(
-                    model,
-                    custom_objects={
-                        'relu6': layers.ReLU(6, name='relu6'),
-                        'DepthwiseConv2D': layers.DepthwiseConv2D
-                    }
-                )
+                # model = _keras.models.load_model(
+                #     model,
+                #     custom_objects={
+                #         'relu6': layers.ReLU(6, name='relu6'),
+                #         'DepthwiseConv2D': layers.DepthwiseConv2D
+                #     }
+                # )
+                model = _keras.models.load_model(model)
             self.weight_loaded = True
 
         elif isinstance(model, tuple):
@@ -330,7 +333,7 @@ class Keras2Parser(Parser):
             if isinstance(source_node.layer.strides, int):
                 source_node.layer.strides = (source_node.layer.strides) * dim
 
-            # padding
+            # paddiselfng
             self._convert_padding(source_node, IR_node)
 
             # strides
