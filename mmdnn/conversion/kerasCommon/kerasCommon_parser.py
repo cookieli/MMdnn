@@ -1,7 +1,7 @@
 
 import mmdnn.conversion.common.IR.graph_pb2 as graph_pb2
 from mmdnn.conversion.common.DataStructure.parser import Parser
-from mmdnn.conversion.common.utils import assign_IRnode_values
+from mmdnn.conversion.common.utils import assign_IRnode_values, compute_tf_same_padding, assign_attr_value
 
 from enum import Enum
 
@@ -26,6 +26,18 @@ class Keras2CommonParser(Parser):
         "int64": graph_pb2.DT_INT64,
         "uint8": graph_pb2.DT_UINT8,
         "uint16": graph_pb2.DT_UINT16
+    }
+
+    activation_map = {
+        "relu": "Relu",
+        'softmax': "Softmax",
+        'sigmoid': "Sigmoid",
+        "tanh": "Tanh",
+        "elu": "Elu",
+        "relu6": "Relu6",
+        'softplus': 'Softplus',
+        'softsign': 'Softsign',
+        'hard_sigmoid': 'HardSigmoid'
     }
 
     def __init__(self, model):
@@ -70,8 +82,21 @@ class Keras2CommonParser(Parser):
         pass
 
     def _convert_padding(self, source_node, IR_node):
-        # TODO
-        pass
+        dims = len(source_node.layer.input_shape)
+        if source_node.layer.padding == 'valid':
+            assign_IRnode_values(IR_node, {'auto_pad': "VALID", 'pads': [0, 0] * dims})
+
+        elif source_node.layer.padding == 'same':
+            kernel_shape = source_node.layer.kernel_size if hasattr(source_node.layer,
+                                                                    'kernel_size') else source_node.layer.pool_size
+            padding = compute_tf_same_padding(
+                source_node.layer.input_shape,
+                kernel_shape,
+                list(source_node.layer.strides))
+            assign_IRnode_values(IR_node, {'auto_pad': "SAME_LOWER", 'pads': padding})
+
+        else:
+            assert False
 
     def _set_conv_weight(self, source_node, isSeparable=False):
         if self.weight_loaded:
@@ -96,7 +121,7 @@ class Keras2CommonParser(Parser):
         else:
             raise NotImplementedError("Convolution layer [{}] is not supported.".format(source_node.type))
 
-    def _create_IR_conv(self, source_node):
+    def _create_IR_conv(self, source_node, dim):
         IR_node = self.IR_graph.node.add()
 
         #input edge
@@ -105,6 +130,58 @@ class Keras2CommonParser(Parser):
         isSeparable = (new_op == ConvEnum.SeparableConv)
         self._transfer_op_attr(source_node, IR_node, new_op.name)
         self._set_conv_weight(source_node, isSeparable)
+        self._convert_padding(source_node, IR_node)
+        self._set_conv_kwargs(source_node, IR_node, dim)
+        self._defuse_activation(source_node)
+
+    def _convert_pooling(self, source_node, dim, pooling_type, is_global):
+        IR_node = self.IR_graph.node.add()
+
+        # input edge
+        self.convert_inedge(source_node, IR_node)
+        name = 'Pool'
+        self._transfer_op_attr(source_node, IR_node, name)
+        pass
+
+
+
+    def _convert_nonGlobal_pooling(self, source_node, dim):
+        layer_pool_size = source_node.layer.pool_size
+        layer_strides   = source_node.layer.strides
+        if isinstance(layer_pool_size, int):
+            layer_pool_size *= dim
+        pass 
+
+    def get_dim_related_attr(self, layer, name, dim):
+        if hasattr(layer, name):
+            attr = getattr(layer, name)
+            if isinstance(attr, int):
+                attr *= dim
+            return attr
+        else:
+            raise AttributeError("layer do not have this attr {}".name)
+
+
+
+
+
+    def _defuse_activation(self, source_node):
+        if source_node.layer.activation is None or source_node.layer.activation.__name__ == "linear":
+            return
+
+        IR_node = self.IR_graph.node.add()
+        IR_node.name = source_node.real_name + "_activation"
+        IR_node.op = self.activation_map[source_node.layer.activation.__name__]
+        IR_node.input.append(source_node.real_name)
+        self._set_output_shape(source_node, IR_node)
+
+        # TODO: More activation functions
+        # for ELU
+        if hasattr(source_node.layer, 'alpha'):
+            assign_attr_value(IR_node['alpha'], source_node.layer.alpha)
+
+        source_node.real_name = IR_node.name
+
 
 
     def _set_conv_kwargs(self, source_node, IR_node, dim):
