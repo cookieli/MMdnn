@@ -145,12 +145,14 @@ class Keras2CommonParser(Parser):
 
 
 
-    def _convert_nonGlobal_pooling(self, source_node, dim):
-        layer_pool_size = source_node.layer.pool_size
-        layer_strides   = source_node.layer.strides
-        if isinstance(layer_pool_size, int):
-            layer_pool_size *= dim
-        pass 
+    def _set_nonGlobal_pooling_kwargs(self, source_node, IR_node, dim, kwargs):
+        layer_pool_size        = self.get_dim_related_attr(self, source_node.layer, 'pool_size', dim)
+        layer_strides          = self.get_dim_related_attr(self, source_node.layer, 'strides', dim)
+        kwargs['strides']      = [1] + list(layer_strides) + [1]
+        kwargs['kernel_shape'] = [1] + list(layer_pool_size) + [1]
+
+
+
 
     def get_dim_related_attr(self, layer, name, dim):
         if hasattr(layer, name):
