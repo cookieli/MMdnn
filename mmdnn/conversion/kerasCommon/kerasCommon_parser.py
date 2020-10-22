@@ -51,7 +51,7 @@ class Keras2CommonParser(Parser):
     def rename_InputLayer(self, source_node):
         IR_node =  self.IR_graph.node.add()
 
-        self._transfer_op_attr(self, IR_node, "DataInput", True)
+        self._transfer_op_attr(source_node, IR_node, "DataInput", True)
         self.convert_inedge(source_node, IR_node)
 
 
@@ -76,10 +76,6 @@ class Keras2CommonParser(Parser):
 
         if need_shape_attr:
             IR_node["shape"].shape = shape
-
-    def _convert_convolution(self, source_node, dim):
-        IR_node = self.IR_graph.node.add()
-        pass
 
     def _convert_padding(self, source_node, IR_node):
         dims = len(source_node.layer.input_shape)
@@ -121,6 +117,26 @@ class Keras2CommonParser(Parser):
         else:
             raise NotImplementedError("Convolution layer [{}] is not supported.".format(source_node.type))
 
+    def init_IR_node(self, source_node):
+        IR_node = self.IR_graph.node.add()
+
+        #input edge
+        self.convert_inedge(source_node, IR_node)
+        #TODO
+        pass
+
+    def get_source_node_type(self, source_node, IR_node):
+        node_type = source_node.type
+        if 'InputLayer' in node_type:
+            self._transfer_op_attr(source_node, IR_node, "DataInput", True)
+        elif 'Conv' in node_type:
+            dim_idx = node_type.find('Conv') + 4
+            dim     = int(node_type[dim_idx])
+            pass
+        #use re to do it
+
+
+
     def _create_IR_conv(self, source_node, dim):
         IR_node = self.IR_graph.node.add()
 
@@ -141,17 +157,25 @@ class Keras2CommonParser(Parser):
         self.convert_inedge(source_node, IR_node)
         name = 'Pool'
         self._transfer_op_attr(source_node, IR_node, name)
-        pass
+        kwargs = {}
+        kwargs['pooling_type'] = pooling_type
+        if is_global:
+            kwargs['global_pooling'] = True
+            kwargs['strides']        = [1] * (dim + 2)
 
-
-
-    def _set_nonGlobal_pooling_kwargs(self, source_node, IR_node, dim, kwargs):
-        layer_pool_size        = self.get_dim_related_attr(self, source_node.layer, 'pool_size', dim)
-        layer_strides          = self.get_dim_related_attr(self, source_node.layer, 'strides', dim)
-        kwargs['strides']      = [1] + list(layer_strides) + [1]
-        kwargs['kernel_shape'] = [1] + list(layer_pool_size) + [1]
-
-
+            #add flatten node
+            flatten_node = self.IR_graph.node.add()
+            flatten_node.name = source_node.name + '_flatten'
+            flatten_node.op = 'Flatten'
+            flatten_node.input.append(source_node.name)
+            self._set_output_shape(source_node, flatten_node)
+            source_node.real_name = flatten_node.name
+        else:
+            layer_pool_size = self.get_dim_related_attr(source_node.layer, 'pool_size', dim)
+            layer_strides = self.get_dim_related_attr(source_node.layer, 'strides', dim)
+            kwargs['strides'] = [1] + list(layer_strides) + [1]
+            kwargs['kernel_shape'] = [1] + list(layer_pool_size) + [1]
+        assign_IRnode_values(IR_node, kwargs)
 
 
     def get_dim_related_attr(self, layer, name, dim):
@@ -162,10 +186,6 @@ class Keras2CommonParser(Parser):
             return attr
         else:
             raise AttributeError("layer do not have this attr {}".name)
-
-
-
-
 
     def _defuse_activation(self, source_node):
         if source_node.layer.activation is None or source_node.layer.activation.__name__ == "linear":
@@ -189,16 +209,9 @@ class Keras2CommonParser(Parser):
     def _set_conv_kwargs(self, source_node, IR_node, dim):
         kwargs = dict()
 
-        layer_kernel_size = source_node.layer.kernel_size
-        if isinstance(layer_kernel_size, int):
-            layer_kernel_size *= dim
-        layer_strides = source_node.layer.strides
-        if isinstance(layer_strides, int):
-            layer_strides *= dim
-        layer_dilation_rate = source_node.layer.dilation_rate
-        if isinstance(layer_dilation_rate, int):
-            layer_dilation_rate *= dim
-
+        layer_kernel_size   = self.get_dim_related_attr(source_node.layer, 'kernel_size', dim)
+        layer_strides       = self.get_dim_related_attr(source_node.layer, 'strides',     dim)
+        layer_dilation_rate = self.get_dim_related_attr(source_node.layer, 'dilation_rate', dim)
         in_channel = source_node.layer.input_shape[-1] if self.data_format == "channels_last" else source_node.layer.input_shape[1]
         out_channel = source_node.layer.filters or source_node.layer.depth_multiplier
 
