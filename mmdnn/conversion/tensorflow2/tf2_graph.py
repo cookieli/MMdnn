@@ -11,8 +11,9 @@ class Tf2Graph(Keras2CommonGraph):
         super(Tf2Graph, self).__init__(model)
 
     def _connect(self, node, layer):
-        if node.inbound_layers == []:
+        if not node.inbound_layers:
             return
         in_layer = node.inbound_layers
         self.add_layer(layer.name, Tf2GraphNode(in_layer))
         self._make_connection(in_layer.name, layer.name)
+        #print("it's in graph debug")

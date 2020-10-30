@@ -14,10 +14,6 @@ class Keras2CommonGraphNode(GraphNode):
     def type(self):
         return self.layer.__class__.__name__
 
-    @property
-    def layer(self):
-        return self.layer
-
 class Keras2CommonGraph(Graph):
 
     def __init__(self, model):
@@ -28,7 +24,7 @@ class Keras2CommonGraph(Graph):
     def _connect(self, node, layer):
         pass
 
-    def build(self,):
+    def build(self):
         self.input_layers = list()
         for i, layer in enumerate(self.model.layers):
             self.layer_map[layer.name] = Keras2CommonGraphNode(layer)

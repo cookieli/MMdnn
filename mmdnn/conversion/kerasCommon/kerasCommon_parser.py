@@ -40,20 +40,18 @@ class Keras2CommonParser(Parser):
         'hard_sigmoid': 'HardSigmoid'
     }
 
-    def __init__(self, model):
-        pass
+    def __init__(self):
+        super(Keras2CommonParser, self).__init__()
 
     def build_graph(self, graph_init, model):
         graph = graph_init(model)
         graph.build()
         return graph
 
-    def rename_InputLayer(self, source_node):
-        IR_node =  self.IR_graph.node.add()
-
-        self._transfer_op_attr(source_node, IR_node, "DataInput", True)
-        self.convert_inedge(source_node, IR_node)
-
+    def gen_IR(self):
+        for layer in self.graph.topological_sort:
+            current_node =  self.graph.get_node(layer)
+            self.gen_IR_from(current_node)
 
     @classmethod
     def _transfer_op_attr(cls, source_node, IR_node, new_op = None, need_shape_attr=False):
@@ -68,14 +66,21 @@ class Keras2CommonParser(Parser):
     @classmethod
     def _set_output_shape(cls, source_node, IR_node, need_shape_attr= False):
         shape = graph_pb2.TensorShape()
-        for dim in source_node.layer.output_shape:
+        tmp_shape = source_node.layer.output_shape
+        if isinstance(tmp_shape, list):
+            output_shape = tmp_shape[0]
+        else:
+            output_shape = tmp_shape
+        for dim in output_shape:
             new_dim = shape.dim.add()
             new_dim.size = dim if dim else -1
-
-        IR_node.attr["_output_shapes"].list.shape.extend([shape])
-
         if need_shape_attr:
-            IR_node["shape"].shape = shape
+            for dim in output_shape:
+                new_dim = IR_node.attr["shape"].shape.dim.add()
+                new_dim.size = -1 if dim == None else dim
+        else:
+            IR_node.attr['shape'].shape.unknown_rank = True
+        IR_node.attr["_output_shapes"].list.shape.extend([shape])
 
     def _convert_padding(self, source_node, IR_node):
         dims = len(source_node.layer.input_shape)
@@ -94,7 +99,7 @@ class Keras2CommonParser(Parser):
         else:
             assert False
 
-    def _set_conv_weight(self, source_node, isSeparable=False):
+    def _set_weight(self, source_node, isSeparable=False):
         if self.weight_loaded:
             if isSeparable:
                 self.set_weight(source_node.name, 'depthwise_filter', source_node.layer.get_weights()[0])
@@ -117,44 +122,69 @@ class Keras2CommonParser(Parser):
         else:
             raise NotImplementedError("Convolution layer [{}] is not supported.".format(source_node.type))
 
-    def init_IR_node(self, source_node):
+
+    def gen_IR_from(self, source_node):
         IR_node = self.IR_graph.node.add()
-
-        #input edge
         self.convert_inedge(source_node, IR_node)
-        #TODO
-        pass
-
-    def get_source_node_type(self, source_node, IR_node):
         node_type = source_node.type
         if 'InputLayer' in node_type:
             self._transfer_op_attr(source_node, IR_node, "DataInput", True)
         elif 'Conv' in node_type:
-            dim_idx = node_type.find('Conv') + 4
+            dim_idx = node_type.find('Conv') + 4 # 4 is conv length, conv node_type often is Conv2d
             dim     = int(node_type[dim_idx])
-            pass
-        #use re to do it
+            self._create_IR_conv(source_node, dim, IR_node)
+        elif 'Pool' in node_type:
+           dim, is_global, pooling_type = self.parse_pool_type(node_type)
+           self._convert_pooling(source_node, dim, pooling_type, is_global, IR_node)
+        elif 'Dense' in node_type:
+            self._set_Dense_attr(source_node,IR_node)
+        elif 'Flatten' in node_type:
+            self._transfer_op_attr(source_node, IR_node)
+        else:
+            raise NotImplementedError('it\'s not implemented')
+
+    def _set_Dense_attr(self, source_node, IR_node):
+        self._transfer_op_attr(source_node, IR_node, 'FullyConnected')
+        IR_node.attr['units'].i    = source_node.layer.units
+        IR_node.attr['use_bias'].b = source_node.layer.use_bias
+
+        #weights
+        self._set_weight(source_node)
+
+        #activation
+        self._defuse_activation(source_node)
 
 
 
-    def _create_IR_conv(self, source_node, dim):
-        IR_node = self.IR_graph.node.add()
+    @classmethod
+    def parse_pool_type(cls, node_type):
+        tmp_idx = node_type.find('Pool')
+        dim = int(node_type[tmp_idx + 7])
+        pooling_type = None
+        is_global = False
+        if 'Global' in node_type:
+            is_global = True
+        if 'Max' in node_type:
+            pooling_type = 'MAX'
+        elif 'Average' in node_type:
+            pooling_type = 'AVG'
+        return dim, is_global, pooling_type
 
-        #input edge
-        self.convert_inedge(source_node, IR_node)
+
+
+
+
+
+    def _create_IR_conv(self, source_node, dim, IR_node):
         new_op = self._parse_conv_node(source_node)
         isSeparable = (new_op == ConvEnum.SeparableConv)
         self._transfer_op_attr(source_node, IR_node, new_op.name)
-        self._set_conv_weight(source_node, isSeparable)
+        self._set_weight(source_node, isSeparable)
         self._convert_padding(source_node, IR_node)
         self._set_conv_kwargs(source_node, IR_node, dim)
         self._defuse_activation(source_node)
 
-    def _convert_pooling(self, source_node, dim, pooling_type, is_global):
-        IR_node = self.IR_graph.node.add()
-
-        # input edge
-        self.convert_inedge(source_node, IR_node)
+    def _convert_pooling(self, source_node, dim, pooling_type, is_global, IR_node):
         name = 'Pool'
         self._transfer_op_attr(source_node, IR_node, name)
         kwargs = {}
@@ -232,8 +262,3 @@ class Keras2CommonParser(Parser):
         kwargs['dilations'] = [1] + list(layer_dilation_rate) + [1]
 
         assign_IRnode_values(IR_node, kwargs)
-
-
-
-
-

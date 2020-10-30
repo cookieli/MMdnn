@@ -40,3 +40,7 @@ class Keras2Graph(Keras2CommonGraph):
         # Duplicate models for weight sharing
         # Expand the sub-models
         super(Keras2Graph, self).build()
+
+    @property
+    def src_graph(self):
+        return self.graph
