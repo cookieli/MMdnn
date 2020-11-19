@@ -82,6 +82,19 @@ class Keras2CommonParser(Parser):
             IR_node.attr['shape'].shape.unknown_rank = True
         IR_node.attr["_output_shapes"].list.shape.extend([shape])
 
+    def get_dim_related_attr(self,layer, name, dim):
+        if hasattr(layer, name):
+            attr = getattr(layer, name)
+            if isinstance(attr, int):
+                return (attr,) * dim
+            return attr
+        else:
+            raise AttributeError("layer do not have this attr {}".name)
+
+    #TODO if you want to add separate padding layer to ir, you should add it to all
+    def add_padding_layer(self):
+        pass
+
     def _convert_padding(self, source_node, IR_node):
         dims = len(source_node.layer.input_shape)
         if source_node.layer.padding == 'valid':
@@ -90,14 +103,36 @@ class Keras2CommonParser(Parser):
         elif source_node.layer.padding == 'same':
             kernel_shape = source_node.layer.kernel_size if hasattr(source_node.layer,
                                                                     'kernel_size') else source_node.layer.pool_size
-            padding = compute_tf_same_padding(
-                source_node.layer.input_shape,
-                kernel_shape,
-                list(source_node.layer.strides))
+            # padding = compute_tf_same_padding(
+            #     source_node.layer.input_shape,
+            #     kernel_shape,
+            #     list(source_node.layer.strides))
+            is_channels_first = source_node.layer.data_format == 'channels_first'
+            is_channels_last  = source_node.layer.data_format == 'channels_last'
+            if is_channels_first:
+                input_shape = source_node.layer.input_shape[2:]
+            elif is_channels_last:
+                input_shape = source_node.layer.input_shape[1:-1]
+            else:
+                raise NotImplementedError('the data_format not in range')
+            strides = source_node.layer.strides
+            padding = []
+            for i in range(len(input_shape)):
+                if input_shape[i] % strides[i] == 0:
+                    pad = max(kernel_shape[i] - strides[i], 0)
+                else:
+                    pad = max(kernel_shape[i] - (input_shape[i] % strides[i]))
+                pad_left  = pad // 2
+                pad_right = pad - pad_left
+                padding.extend([pad_left, pad_right])
+            if is_channels_first:
+                padding = [0,0,0,0] + padding
+            else:
+                padding = [0,0] + padding + [0,0]
             assign_IRnode_values(IR_node, {'auto_pad': "SAME_LOWER", 'pads': padding})
-
         else:
             assert False
+
 
     def _set_weight(self, source_node, isSeparable=False):
         if self.weight_loaded:
@@ -140,8 +175,13 @@ class Keras2CommonParser(Parser):
             self._set_Dense_attr(source_node,IR_node)
         elif 'Flatten' in node_type:
             self._transfer_op_attr(source_node, IR_node)
+            assign_IRnode_values(IR_node, {'data_format': source_node.layer.data_format})
+        elif 'ZeroPadding'  in node_type:
+            self._transfer_op_attr(source_node, IR_node)
+            assign_IRnode_values(IR_node, {'data_format': source_node.layer.data_format})
+
         else:
-            raise NotImplementedError('it\'s not implemented')
+            raise NotImplementedError('it\'s not implemented {}'.format(node_type))
 
     def _set_Dense_attr(self, source_node, IR_node):
         self._transfer_op_attr(source_node, IR_node, 'FullyConnected')
@@ -178,7 +218,7 @@ class Keras2CommonParser(Parser):
     def _create_IR_conv(self, source_node, dim, IR_node):
         new_op = self._parse_conv_node(source_node)
         isSeparable = (new_op == ConvEnum.SeparableConv)
-        self._transfer_op_attr(source_node, IR_node, new_op.name)
+        self._transfer_op_attr(source_node, IR_node, new_op.name)#fixme
         self._set_weight(source_node, isSeparable)
         self._convert_padding(source_node, IR_node)
         self._set_conv_kwargs(source_node, IR_node, dim)
@@ -189,6 +229,7 @@ class Keras2CommonParser(Parser):
         self._transfer_op_attr(source_node, IR_node, name)
         kwargs = {}
         kwargs['pooling_type'] = pooling_type
+        kwargs['dim']  = dim
         if is_global:
             kwargs['global_pooling'] = True
             kwargs['strides']        = [1] * (dim + 2)
@@ -201,21 +242,13 @@ class Keras2CommonParser(Parser):
             self._set_output_shape(source_node, flatten_node)
             source_node.real_name = flatten_node.name
         else:
+            kwargs['global_pooling'] = False
             layer_pool_size = self.get_dim_related_attr(source_node.layer, 'pool_size', dim)
-            layer_strides = self.get_dim_related_attr(source_node.layer, 'strides', dim)
+            layer_strides   = self.get_dim_related_attr(source_node.layer, 'strides', dim)
+            #it's a wrong implementation,but for compatibility i won't fix it now
             kwargs['strides'] = [1] + list(layer_strides) + [1]
             kwargs['kernel_shape'] = [1] + list(layer_pool_size) + [1]
         assign_IRnode_values(IR_node, kwargs)
-
-
-    def get_dim_related_attr(self, layer, name, dim):
-        if hasattr(layer, name):
-            attr = getattr(layer, name)
-            if isinstance(attr, int):
-                attr *= dim
-            return attr
-        else:
-            raise AttributeError("layer do not have this attr {}".name)
 
     def _defuse_activation(self, source_node):
         if source_node.layer.activation is None or source_node.layer.activation.__name__ == "linear":
@@ -225,7 +258,7 @@ class Keras2CommonParser(Parser):
         IR_node.name = source_node.real_name + "_activation"
         IR_node.op = self.activation_map[source_node.layer.activation.__name__]
         IR_node.input.append(source_node.real_name)
-        self._set_output_shape(source_node, IR_node)
+        #self._set_output_shape(source_node, IR_node)
 
         # TODO: More activation functions
         # for ELU
@@ -233,7 +266,6 @@ class Keras2CommonParser(Parser):
             assign_attr_value(IR_node['alpha'], source_node.layer.alpha)
 
         source_node.real_name = IR_node.name
-
 
 
     def _set_conv_kwargs(self, source_node, IR_node, dim):
@@ -249,7 +281,7 @@ class Keras2CommonParser(Parser):
             kwargs['kernel_shape'] = list(layer_kernel_size) + [out_channel, in_channel]
         else:
             kwargs['kernel_shape'] = list(layer_kernel_size) + [in_channel, out_channel]
-
+        kwargs['rank'] = dim
         # use_bias
         kwargs['use_bias'] = source_node.layer.use_bias
 
@@ -262,3 +294,6 @@ class Keras2CommonParser(Parser):
         kwargs['dilations'] = [1] + list(layer_dilation_rate) + [1]
 
         assign_IRnode_values(IR_node, kwargs)
+
+    def get_op(self, name):
+        raise NotImplementedError('should implemented in subclass')

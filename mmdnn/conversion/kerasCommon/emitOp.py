@@ -1,3 +1,20 @@
+from mmdnn.conversion.common.IR import graph_pb2
+from mmdnn.conversion.common.IR.IR_graph import IRGraph
+
+def model_out(inputs, outputs, tab_str, weights_path = None):
+    name = 'tf.keras.Model'
+    arg = "(" + "inputs={}, outputs={}, name='output_model'".format(inputs, outputs) +")"
+    ret =  tab_str + 'model = ' + name + arg
+    if weights_path:
+        ret += '\n'
+        ret += tab_str + 'model' + '.' + 'load_weights' + '(' +weights_path  + ')'
+    ret += '\n'
+    ret += tab_str + 'return model'
+    return ret
+
+def add_tf_import():
+    return 'import tensorflow as tf ' + '\n'
+
 class BaseOp(object):
     header = 'tf.keras.layers'
     args   = ''
@@ -18,14 +35,26 @@ class BaseOp(object):
         'gblavgpool3D': header + '.' + 'GlobalAveragePooling3D',
         'flatten'     : header + '.' + 'Flatten',
         'dense'       : header + '.' + 'Dense'
-
     }
-    def __init__(self, **kwargs):
-        self.attr = {k:v for k, v in kwargs if self.need_reserve(k,kwargs)}
+
+    dtype_map = {
+        graph_pb2.DT_FLOAT16: "float16",
+        graph_pb2.DT_FLOAT32: "float32",
+        graph_pb2.DT_FLOAT64: "float64",
+        graph_pb2.DT_INT16: "int16",
+        graph_pb2.DT_INT32: "int32",
+        graph_pb2.DT_INT64: "int64",
+        graph_pb2.DT_UINT8: "uint8",
+        graph_pb2.DT_UINT16: "uint16"
+    }
+
+    def __init__(self, lvalue, input_val):
+        self.input_val  = input_val
+        self.lvalue = lvalue
 
     @property
     def call_header(self):
-        pass
+        raise NotImplementedError("you should implement it in subclass")
 
     def need_reserve(self, key, **kwargs):
         ret = self.kwargs[key] is not None
@@ -33,101 +62,183 @@ class BaseOp(object):
             return ret and key in self.args
         return ret
 
-    def emit_code(self):
-        ret = '('
-        attr_map =  {k:v for k, v in self.attr if self.need_reserve(k)}
-        for key, value in attr_map:
-            ret += (key + ' = ' + str(vars(self)[key])) + ' , '
-        ret = ret[:-1] + ')'
-        return self.call_header + ret
+    def construct_arg(self):
+        pass
+
+    def emit_code(self, activation = None):
+        func = None
+        if activation is None:
+            func = self.call_header + '(' + self.construct_arg()  + ')'
+        else:
+            func = self.call_header \
+               + '(' + self.construct_arg() + ", activation = '{}'".format(activation.lower()) + ')'
+        return self.lvalue + '=' +  func + '(' + self.input_val + ')'
 
 class InputOp(BaseOp):
-    def __init__(self, shape=None, batch_size=None,
-                 name=None, dtype=None, sparse=False,
-                 tensor=None,ragged=False):
-        self.shape      = shape
-        self.batch_size = batch_size
-        self.name       = name
-        self.dtype      = dtype
-        self.sparse     = sparse
-        self.tensor     = tensor
-        self.ragged     = ragged
-        super(InputOp, self).__init__()
+    def __init__(self, IR_node, lvalue, input_val=None):
+        self.IR_node = IR_node
+        super(InputOp, self).__init__(lvalue, input_val)
+
+    def construct_arg(self):
+        shape_str = IRGraph.shapeToStr(self.IR_node.layer.attr['shape'].shape)
+        dtype_str =  self.dtype_map[self.IR_node.layer.attr['dtype'].type] \
+                            if 'dtype' in self.IR_node.layer.attr else ""
+        arg = "name = '{}', shape= ({}), dtype = '{}'".format(
+            self.IR_node.variable_name,
+            shape_str,
+            dtype_str)
+        return arg
 
     @property
     def call_header(self):
-        return self.layer_call_mapp['input']
+        return self.layer_call_map['input']
+
+    def emit_code(self, activation = None):
+        func = None
+        if activation is None:
+            func = self.call_header + '(' + self.construct_arg()  + ')'
+        else:
+            func = self.call_header \
+               + '(' + self.construct_arg() + ", activation = '{}'".format(activation.lower()) + ')'
+        return self.lvalue + '=' + func
 
 class ConvOp(BaseOp):
-    args = """filters, kernel_size, strides=1, padding='valid', output_padding=None,
-                   data_format=None, dilation_rate=1, activation=None, use_bias=True,
-                   kernel_initializer='glorot_uniform', bias_initializer='zeros',
-                   kernel_regularizer=None, bias_regularizer=None, activity_regularizer=None,
-                   kernel_constraint=None, bias_constraint=None,"""
+    args = """filters, kernel_size, strides=(1, 1), padding='valid', data_format=None,
+               dilation_rate=(1, 1), groups=1, activation=None, use_bias=True,
+               kernel_initializer='glorot_uniform', bias_initializer='zeros',
+               kernel_regularizer=None, bias_regularizer=None, activity_regularizer=None,
+               kernel_constraint=None, bias_constraint=None, **kwargs"""
     CONV1D    = 1
     CONV2D    = 2
     CONV3D    = 3
 
-    def __init__(self, dim, **kwargs):
-        self.dim  = dim
-        super(ConvOp, self).__init__(kwargs)
-        self.transpose = False
-        if 'output_padding' in self.attr:
-            self.transpose = True
+    # def __init__(self, dim, **kwargs):
+    #     self.dim  = dim
+    #     super(ConvOp, self).__init__(kwargs)
+    #     self.transpose = False
+    #     if 'output_padding' in self.attr:
+    #         self.transpose = True
 
+    def __init__(self, IR_node, conv_type, lvalue, input_val):
+        super().__init__(lvalue, input_val)
+        self.IR_node = IR_node
+        self.conv_type = conv_type
+
+    def construct_arg(self):
+        group = self.IR_node.get_attr("group", 1)
+
+        if self.conv_type.endswith('Transpose'):
+            filters = self.IR_node.get_attr('kernel_shape')[-2]
+        else:
+            filters = self.IR_node.get_attr('kernel_shape')[-1]
+
+        filters_str = 'filters={}'.format(filters) if not self.conv_type.endswith(
+            'DepthwiseConv2D') else 'depth_multiplier={}'.format(filters)
+        # change dw from filters to 1
+        padding = 'VALID'
+
+        dilations = self.IR_node.get_attr('dilations')
+
+        if not dilations or len(dilations) == 2:
+            # reset the default dilation
+            dilations = [1] * len(self.IR_node.get_attr('kernel_shape'))
+
+        args = "name='{}', group={}, conv_type='{}', {}, kernel_size={}, strides={}, dilation_rate={}, padding='{}', use_bias={}".format(
+            self.IR_node.name,
+            group,
+            self.conv_type,
+            filters_str,
+            tuple(self.IR_node.get_attr('kernel_shape')[:-2]),
+            tuple(self.IR_node.get_attr('strides')[1:-1]),
+            tuple(dilations[1:-1]),
+            padding,
+            self.IR_node.get_attr('use_bias'))
+        return args
+
+    @property
     def call_header(self):
-        name = 'conv' + str(self.dim) + 'D'
-        name += 'Transpose'
+        name = 'conv' + str(self.IR_node.get_attr('rank')) + 'D'
+        #name += 'Transpose'
         return self.layer_call_map[name]
 
-class PoolingOp(BaseOp):
-    MAX = 1
-    AVG = 2
+class PadOp(BaseOp):
+    def __init__(self, padding, lvalue, input_val):
+        super().__init__(lvalue, input_val)
+        self.paddings = [padding[i:i+2] for i in range(0, len(padding), 2)]
 
-    def __init__(self, dim, kind, is_global, **kwargs):
-        self.dim = dim
-        self.kind = kind
-        self.is_global = is_global
-        super(PoolingOp, self).__init__(kwargs)
-
+    @property
     def call_header(self):
-        name = 'pool' + self.dim + 'D'
-        if self.kind == self.MAX:
+        return 'tf.pad'
+
+    def construct_arg(self):
+        return "tensor={}, paddings = {}, mode = 'CONSTANT'".format(self.input_val, str(self.paddings))
+
+    def emit_code(self, activation = None):
+        func = None
+        if activation is None:
+            func = self.call_header + '(' + self.construct_arg()  + ')'
+        else:
+            func = self.call_header \
+               + '(' + self.construct_arg() + ", activation = '{}'".format(activation.lower()) + ')'
+        return self.lvalue + '=' + func
+
+class PoolingOp(BaseOp):
+    def __init__(self, IR_node, lvalue, input_val):
+        super().__init__(lvalue, input_val)
+        self.IR_node = IR_node
+
+    @property
+    def call_header(self):
+        dim = self.IR_node.get_attr('dim')
+        name = 'pool' + str(dim) + 'D'
+        kind = self.IR_node.get_attr('pooling_type')
+        if kind == 'MAX':
             name = 'max' + name
-        elif  self.kind == self.AVG:
+        elif  kind == 'AVG':
             name = 'avg' + name
         else:
             raise NotImplementedError('not implemented')
-        if self.is_global:
+        is_global = self.IR_node.get_attr('global_pooling')
+        if is_global:
             name = 'gbl' + name
         return self.layer_call_map[name]
 
-class FlattenOp(BaseOp):
-    def __init__(self, **kwargs):
-        super(FlattenOp, self).__init__(kwargs)
+    def construct_arg(self):
+        pool_size = tuple(self.IR_node.get_attr('kernel_shape')[1:-1])
+        strides   = tuple(self.IR_node.get_attr('strides')[1:-1])
+        arg = "pool_size = {}, strides = {}, name = '{}'".format(pool_size, strides, self.IR_node.name)
+        return arg
 
+class FlattenOp(BaseOp):
+    def __init__(self, IR_node, lvalue, input_val):
+        super().__init__(lvalue, input_val)
+        self.IR_node = IR_node
+
+    @property
     def call_header(self):
         name = 'flatten'
         return self.layer_call_map[name]
+
+    def construct_arg(self):
+        arg = "name='flatten', data_format = '{}'".format(self.IR_node.get_attr('data_format'))
+        return arg
 
 class DenseOp(BaseOp):
     args = """units, activation=None, use_bias=True, kernel_initializer='glorot_uniform',
               bias_initializer='zeros', kernel_regularizer=None, bias_regularizer=None,
               activity_regularizer=None, kernel_constraint=None, bias_constraint=None,"""
-    def __init__(self, **kwargs):
-        super(DenseOp, self).__init__(kwargs)
+    def __init__(self, IR_node, lvalue, input_val):
+        super().__init__(lvalue, input_val)
+        self.IR_node = IR_node
 
+    @property
     def call_header(self):
         name = 'dense'
         return self.layer_call_map[name]
 
-
-
-class ModelCostructor
-
-
-
-
-
-
-
+    def construct_arg(self):
+        arg = "units = {}, use_bias = {}, name = '{}'".format(self.IR_node.get_attr('units'),
+                                                                self.IR_node.get_attr('use_bias'),
+                                                                self.IR_node.name)
+        return arg
+#class ModelCostructor

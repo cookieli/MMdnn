@@ -67,6 +67,7 @@ class IRGraphNode(GraphNode):
                     return list(val.ListFields()[0][1])
                 else:
                     return val.ListFields()
+
             else:
                 return val.decode('utf-8') if isinstance(val, bytes) else val
         else:

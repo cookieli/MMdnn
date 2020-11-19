@@ -13,7 +13,12 @@ class Tf2Graph(Keras2CommonGraph):
     def _connect(self, node, layer):
         if not node.inbound_layers:
             return
-        in_layer = node.inbound_layers
-        self.add_layer(layer.name, Tf2GraphNode(in_layer))
-        self._make_connection(in_layer.name, layer.name)
+        if not isinstance(node.inbound_layers, list):
+            in_layer = node.inbound_layers
+            self.add_layer(in_layer.name, Tf2GraphNode(in_layer))
+            self._make_connection(in_layer.name, layer.name)
+        else:
+            for in_layer in node.inbound_layers:
+                self.add_layer(in_layer.name, Tf2GraphNode(in_layer))
+                self._make_connection(in_layer.name, layer.name)
         #print("it's in graph debug")
