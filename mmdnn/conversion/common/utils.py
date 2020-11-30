@@ -15,6 +15,30 @@ __all__ = ["assign_IRnode_values", "convert_onnx_pad_to_tf", 'convert_tf_pad_to_
            'compute_tf_same_padding', 'is_valid_padding', 'download_file',
            'shape_to_list', 'list_to_shape']
 
+from enum import Enum
+ConvEnum = Enum(
+    value='Conv',
+    names=[
+        ('SeparableConv', 1),
+        ('ConvTranspose', 2),
+        ('DepthwiseConv', 3),
+        ('Conv', 4),
+    ]
+)
+
+def _parse_conv_node(source_node):
+    if source_node.type.startswith('Separable'):
+        return ConvEnum.SeparableConv
+    elif source_node.type.startswith('Conv'):
+        if source_node.type.endswith('Transpose'):
+            return ConvEnum.ConvTranspose
+        return ConvEnum.Conv
+    elif source_node.type.startswith('Deconv'):
+        return ConvEnum.ConvTranspose
+    elif source_node.type.startswith('Depthwise'):
+        return ConvEnum.DepthwiseConv
+    else:
+        raise NotImplementedError("Convolution layer [{}] is not supported.".format(source_node.type))
 
 def assign_attr_value(attr, val):
     from mmdnn.conversion.common.IR.graph_pb2 import TensorShape

@@ -4,7 +4,6 @@ import tensorflow as tf
 
 from mmdnn.conversion.kerasCommon.kerasCommon_parser import Keras2CommonParser
 from mmdnn.conversion.tensorflow2.tf2_graph import Tf2Graph
-from mmdnn.conversion.tensorflow2.tf2_op_map import op_map
 
 class Tf2Parser(Keras2CommonParser):
 
@@ -25,4 +24,5 @@ class Tf2Parser(Keras2CommonParser):
         return self.graph
 
     def get_op(self, name):
-        return op_map[name]
+        #return op_map[name]
+        pass

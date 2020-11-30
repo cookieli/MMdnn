@@ -1,19 +1,10 @@
 
 import mmdnn.conversion.common.IR.graph_pb2 as graph_pb2
 from mmdnn.conversion.common.DataStructure.parser import Parser
-from mmdnn.conversion.common.utils import assign_IRnode_values, compute_tf_same_padding, assign_attr_value
-
-from enum import Enum
-
-ConvEnum = Enum(
-    value='Conv',
-    names=[
-        ('SeparableConv', 1),
-        ('ConvTranspose', 2),
-        ('DepthwiseConv', 3),
-        ('Conv', 4),
-    ]
-)
+from mmdnn.conversion.common.Runtime.env import Env
+from mmdnn.conversion.common.utils import assign_IRnode_values, compute_tf_same_padding, assign_attr_value, ConvEnum
+from mmdnn.conversion.tensorflow2.attr_policy import execute_to_kwargs_policy
+from mmdnn.conversion.tensorflow2.tf2_op_map import op_ir_name, op_attr_map
 
 class Keras2CommonParser(Parser):
 
@@ -143,7 +134,8 @@ class Keras2CommonParser(Parser):
         if source_node.layer.use_bias:
             self.set_weight(source_node.name, "bias", source_node.layer.get_weights()[1])
 
-    def _parse_conv_node(self, source_node):
+    @classmethod
+    def _parse_conv_node(cls, source_node):
         if source_node.type.startswith('Separable'):
             return ConvEnum.SeparableConv
         elif source_node.type.startswith('Conv'):
@@ -165,17 +157,19 @@ class Keras2CommonParser(Parser):
         if 'InputLayer' in node_type:
             self._transfer_op_attr(source_node, IR_node, "DataInput", True)
         elif 'Conv' in node_type:
-            dim_idx = node_type.find('Conv') + 4 # 4 is conv length, conv node_type often is Conv2d
-            dim     = int(node_type[dim_idx])
-            self._create_IR_conv(source_node, dim, IR_node)
+            self._set_op_attr(source_node, IR_node, op_attr_map['Conv'])
+            # dim_idx = node_type.find('Conv') + 4 # 4 is conv length, conv node_type often is Conv2d
+            # dim     = int(node_type[dim_idx])
+            # self._create_IR_conv(source_node, dim, IR_node)
         elif 'Pool' in node_type:
            dim, is_global, pooling_type = self.parse_pool_type(node_type)
            self._convert_pooling(source_node, dim, pooling_type, is_global, IR_node)
         elif 'Dense' in node_type:
-            self._set_Dense_attr(source_node,IR_node)
+            self._set_op_attr(source_node, IR_node, op_attr_map['Dense'])
         elif 'Flatten' in node_type:
-            self._transfer_op_attr(source_node, IR_node)
-            assign_IRnode_values(IR_node, {'data_format': source_node.layer.data_format})
+            self._set_op_attr(source_node, IR_node, op_attr_map['Flatten'])
+            # self._transfer_op_attr(source_node, IR_node)
+            # assign_IRnode_values(IR_node, {'data_format': source_node.layer.data_format})
         elif 'ZeroPadding'  in node_type:
             self._transfer_op_attr(source_node, IR_node)
             assign_IRnode_values(IR_node, {'data_format': source_node.layer.data_format})
@@ -195,6 +189,33 @@ class Keras2CommonParser(Parser):
         self._defuse_activation(source_node)
 
 
+    def _set_op_attr(self, source_node, IR_node, attrs):
+        op_name = source_node.type
+        is_separable_conv = 'SeparableConv' in op_name
+        if op_name in op_ir_name:
+            op_name = op_ir_name[op_name]
+        self._transfer_op_attr(source_node, IR_node, op_name)
+        kwargs = {}
+        for attr in attrs:
+            if attr != 'weight' and attr != 'activation':
+                execute_to_kwargs_policy(source_node, attr, kwargs)
+        assign_IRnode_values(IR_node, kwargs)
+        self._set_weight_activation(attrs, source_node, is_separable_conv)
+
+    def set_op_attr(self, source_node, IR_node, env:Env):
+        op_exe, kwargs = env.evaluate(source_node)
+        self._transfer_op_attr(source_node, IR_node, op_exe.unify_name)
+        assign_IRnode_values(IR_node, kwargs)
+        if op_exe.has_weight:
+            self._set_weight(source_node, op_exe.is_separable_conv)
+        if op_exe.has_activaiton:
+            self._defuse_activation(source_node)
+
+    def _set_weight_activation(self, attrs, source_node, is_separable_conv=False):
+        if 'weight' in attrs:
+            self._set_weight(source_node, is_separable_conv)
+        if 'activation' in attrs:
+            self._defuse_activation(source_node)
 
     @classmethod
     def parse_pool_type(cls, node_type):
@@ -210,11 +231,6 @@ class Keras2CommonParser(Parser):
             pooling_type = 'AVG'
         return dim, is_global, pooling_type
 
-
-
-
-
-
     def _create_IR_conv(self, source_node, dim, IR_node):
         new_op = self._parse_conv_node(source_node)
         isSeparable = (new_op == ConvEnum.SeparableConv)
@@ -227,9 +243,8 @@ class Keras2CommonParser(Parser):
     def _convert_pooling(self, source_node, dim, pooling_type, is_global, IR_node):
         name = 'Pool'
         self._transfer_op_attr(source_node, IR_node, name)
-        kwargs = {}
-        kwargs['pooling_type'] = pooling_type
-        kwargs['dim']  = dim
+        kwargs = {'pooling_type': pooling_type, 'dim': dim}
+        # global kernel size is H,W
         if is_global:
             kwargs['global_pooling'] = True
             kwargs['strides']        = [1] * (dim + 2)
