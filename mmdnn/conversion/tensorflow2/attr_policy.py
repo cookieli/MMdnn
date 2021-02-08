@@ -63,7 +63,7 @@ def get_conv_kwargs(source_node, kwargs):
     in_channel = source_node.layer.input_shape[-1] if source_node.layer.data_format == "channels_last" \
                                                       else source_node.layer.input_shape[-1 - dim]
     out_channel = source_node.layer.filters or source_node.layer.depth_multiplier
-    if source_node.type.startswith("Deconv"):
+    if source_node.type.startswith("Deconv") or source_node.type.endswith('Transpose'):
         kwargs['kernel_shape'] = list(layer_kernel_size) + [out_channel, in_channel]
     else:
         kwargs['kernel_shape'] = list(layer_kernel_size) + [in_channel, out_channel]

@@ -75,6 +75,14 @@ def assign_IRnode_values(IR_node, val_dict):
     for name, val in val_dict.items():
         assign_attr_value(IR_node.attr[name], val)
 
+def flatten_tuple(tp):
+    ret = []
+    for t in tp:
+        if isinstance(t, tuple):
+            ret.extend(flatten_tuple(t))
+        else:
+            ret.append(t)
+    return ret
 
 # For padding
 def convert_tf_pad_to_onnx(pads):

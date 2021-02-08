@@ -31,8 +31,9 @@ class Keras2CommonParser(Parser):
         'hard_sigmoid': 'HardSigmoid'
     }
 
-    def __init__(self):
+    def __init__(self, env=None):
         super(Keras2CommonParser, self).__init__()
+        self.env = env
 
     def build_graph(self, graph_init, model):
         graph = graph_init(model)
@@ -42,10 +43,11 @@ class Keras2CommonParser(Parser):
     def gen_IR(self):
         for layer in self.graph.topological_sort:
             current_node =  self.graph.get_node(layer)
-            self.gen_IR_from(current_node)
+            self._gen_IR_from(current_node)
 
     @classmethod
     def _transfer_op_attr(cls, source_node, IR_node, new_op = None, need_shape_attr=False):
+        #print(source_node.name, source_node.type)
         IR_node.name = source_node.name
         IR_node.op = source_node.type if new_op == None else new_op
 
@@ -149,6 +151,10 @@ class Keras2CommonParser(Parser):
         else:
             raise NotImplementedError("Convolution layer [{}] is not supported.".format(source_node.type))
 
+    def _gen_IR_from(self, source_node):
+        IR_node = self.IR_graph.node.add()
+        self.convert_inedge(source_node, IR_node)
+        self.set_op_attr(source_node, IR_node, self.env)
 
     def gen_IR_from(self, source_node):
         IR_node = self.IR_graph.node.add()
@@ -204,11 +210,19 @@ class Keras2CommonParser(Parser):
 
     def set_op_attr(self, source_node, IR_node, env:Env):
         op_exe, kwargs = env.evaluate(source_node)
-        self._transfer_op_attr(source_node, IR_node, op_exe.unify_name)
+        self._transfer_op_attr(source_node, IR_node, op_exe.unify_name, op_exe.is_data_input(source_node.type))
         assign_IRnode_values(IR_node, kwargs)
+        idx = 0
+        for key, value in op_exe.trainable.items():
+            if value is not None:
+                if getattr(source_node.layer, value):
+                    self.set_weight(source_node.name, key, source_node.layer.get_weights()[idx])
+            else:
+                self.set_weight(source_node.name, key, source_node.layer.get_weights()[idx])
+            idx += 1
         if op_exe.has_weight:
-            self._set_weight(source_node, op_exe.is_separable_conv)
-        if op_exe.has_activaiton:
+            self._set_weight(source_node, op_exe.is_separable_conv(source_node.type))
+        if op_exe.has_activation:
             self._defuse_activation(source_node)
 
     def _set_weight_activation(self, attrs, source_node, is_separable_conv=False):

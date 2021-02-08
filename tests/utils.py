@@ -1,6 +1,5 @@
 from __future__ import absolute_import
 from __future__ import print_function
-
 __all__ = ['ensure_dir', 'checkfrozen', 'CorrectnessTest']
 
 import os
@@ -16,6 +15,19 @@ def _compute_SNR(x,y):
     PSNR = 10 * np.log10(max_signal_energy / noise_var)
     return SNR, PSNR
 
+def is_two_json_same(jsonfile1, jsonfile2):
+    import json
+    obj1 = json.load(jsonfile1)
+    obj2 = json.load(jsonfile2)
+
+    def ordered(obj):
+        if isinstance(obj, dict):
+            return sorted((k, ordered(v)) for k, v in obj.items())
+        if isinstance(obj, list):
+            return sorted(ordered(x) for x in obj)
+        else:
+            return obj
+    return ordered(obj1) == ordered(obj2)
 
 def _compute_max_relative_error(x, y):
     from six.moves import xrange

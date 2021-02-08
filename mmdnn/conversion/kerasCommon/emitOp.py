@@ -1,3 +1,5 @@
+from typing import Dict
+
 from mmdnn.conversion.common.IR import graph_pb2
 from mmdnn.conversion.common.IR.IR_graph import IRGraph
 
@@ -14,6 +16,12 @@ def model_out(inputs, outputs, tab_str, weights_path = None):
 
 def add_tf_import():
     return 'import tensorflow as tf ' + '\n'
+
+def construct_arg(args:Dict[str, str])->str:
+    ret = ""
+    for k, v in args.items():
+        ret += "{}={}, ".format(k, v)
+    return ret[:-2]
 
 class BaseOp(object):
     header = 'tf.keras.layers'
@@ -34,7 +42,10 @@ class BaseOp(object):
         'gblavgpool2D': header + '.' + 'GlobalAveragePooling2D',
         'gblavgpool3D': header + '.' + 'GlobalAveragePooling3D',
         'flatten'     : header + '.' + 'Flatten',
-        'dense'       : header + '.' + 'Dense'
+        'dense'       : header + '.' + 'Dense',
+        'zeropadding' : header + '.' + 'ZeroPadding',
+        'batchnorm'   : header + '.' + 'BatchNormalization',
+        'activation'  : header + '.' + 'Activation'
     }
 
     dtype_map = {
@@ -119,10 +130,10 @@ class ConvOp(BaseOp):
     #     if 'output_padding' in self.attr:
     #         self.transpose = True
 
-    def __init__(self, IR_node, conv_type, lvalue, input_val):
+    def __init__(self, IR_node, lvalue, input_val):
         super().__init__(lvalue, input_val)
         self.IR_node = IR_node
-        self.conv_type = conv_type
+        self.conv_type = IR_node.type
 
     def construct_arg(self):
         group = self.IR_node.get_attr("group", 1)
@@ -241,4 +252,59 @@ class DenseOp(BaseOp):
                                                                 self.IR_node.get_attr('use_bias'),
                                                                 self.IR_node.name)
         return arg
-#class ModelCostructor
+
+class ZeroPaddingOp(BaseOp):
+
+    def __init__(self, IR_node, lvalue, input_val):
+        super().__init__(lvalue, input_val)
+        self.IR_node = IR_node
+
+    @property
+    def call_header(self):
+        name =  'zeropadding'
+        dim  =  self.IR_node.get_attr('dim')
+        return self.layer_call_map[name] + str(dim) + 'D'
+
+    def construct_arg(self):
+        args = {'padding':tuple(self.IR_node.get_attr('padding')),
+                'data_format': self.IR_node.get_attr('data_format')}
+        ret = ""
+        for k, v in args.items():
+            ret +="{}={}, ".format(k, v)
+        return ret[:-2]
+
+class BatchNormOp(BaseOp):
+
+    def __init__(self, IR_node, lvalue, input_val):
+        super(BatchNormOp, self).__init__(lvalue, input_val)
+        self.IR_node = IR_node
+
+    @property
+    def call_header(self):
+        name = 'batchnorm'
+        return self.layer_call_map[name]
+
+    def construct_arg(self):
+        args = {'axis'    : self.IR_node.get_attr('axis'),
+                'momentum': self.IR_node.get_attr('momentum'),
+                'epsilon' : self.IR_node.get_attr('epsilon'),
+                'center'  : self.IR_node.get_attr('center'),
+                'scale'   : self.IR_node.get_attr('scale')}
+        return construct_arg(args)
+
+class ActivationOp(BaseOp):
+
+    def __init__(self, IR_node, lvalue, input_val):
+        super(BatchNormOp, self).__init__(lvalue, input_val)
+        self.IR_node = IR_node
+
+    @property
+    def call_header(self):
+        name = 'activation'
+        return self.layer_call_map[name]
+
+    def construct_arg(self):
+        args = {'activation' : self.IR_node.get_attr('activation')}
+        return construct_arg(args)
+
+

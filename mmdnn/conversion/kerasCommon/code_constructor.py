@@ -1,6 +1,8 @@
+from typing import Callable, Dict
+
 from mmdnn.conversion.common.IR.IR_graph import IRGraph
 from mmdnn.conversion.kerasCommon.emitOp import InputOp, ConvOp, PoolingOp, FlattenOp, DenseOp, PadOp, model_out, \
-    add_tf_import
+    add_tf_import, ZeroPaddingOp, BatchNormOp
 
 
 class CodeConstructor(object):
@@ -12,7 +14,10 @@ class CodeConstructor(object):
             network_path = model[0]
             self.weight_path = model[1]
             # self._load_weights(weight_path)
-
+        # op_map maps from op name to initialize function
+        self.op_map: Dict[str, Callable] = {'Conv': ConvOp, 'Pool': PoolingOp,
+                                            'Flatten': FlattenOp, 'FullyConnected': DenseOp,
+                                            'ZeroPadding': ZeroPaddingOp, 'BatchNorm': BatchNormOp}
         self.IR_graph = IRGraph(network_path)
         self.IR_graph.build()
 
@@ -58,20 +63,14 @@ class CodeConstructor(object):
                     op = InputOp(node, lvalue=lvalue)
                 else:
                     if len(node.in_edges) != 1:
-                        raise NotImplementedError("not handle multiinput edge error")
+                        raise NotImplementedError("not handle multi input edge error")
                     else:
                         input_val = op_map[node.in_edges[0]].lvalue
                     input_val, cnt = self.add_padding(node, input_val, lvalue, cnt, tab_str)
-                    if node.type == 'Conv':
-                        op = ConvOp(node, node.type, lvalue=lvalue, input_val=input_val)
-                    elif node.type == 'Pool':
-                        op = PoolingOp(node, lvalue=lvalue, input_val=input_val)
-                    elif node.type == 'Flatten':
-                        op = FlattenOp(node, lvalue=lvalue, input_val=input_val)
-                    elif node.type == 'FullyConnected':
-                        op = DenseOp(node, lvalue=lvalue, input_val=input_val)
+                    if node.type in self.op_map:
+                        op = self.op_map[node.type](node, lvalue, input_val)
                     else:
-                        raise NotImplementedError("Unsupported op")
+                        raise NotImplementedError("Unsupported op {}".format(node.type))
             op_map[layer] = op
         print(tab_str + op.emit_code(activation))
         print(model_out(inputs=inputs, outputs=op.lvalue, weights_path=weight_path, tab_str=tab_str))

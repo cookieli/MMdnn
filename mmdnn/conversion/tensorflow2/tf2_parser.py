@@ -4,11 +4,10 @@ import tensorflow as tf
 
 from mmdnn.conversion.kerasCommon.kerasCommon_parser import Keras2CommonParser
 from mmdnn.conversion.tensorflow2.tf2_graph import Tf2Graph
-
 class Tf2Parser(Keras2CommonParser):
 
-    def __init__(self, model_name):
-        super(Tf2Parser, self).__init__()
+    def __init__(self, model_name, env):
+        super(Tf2Parser, self).__init__(env)
         if isinstance(model_name, _string_types):
             model = tf.keras.models.load_model(model_name)
         else:
